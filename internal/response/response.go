@@ -2,6 +2,7 @@ package response
 
 import (
 	"errors"
+	"fmt"
 	"httpfromtcp/internal/headers"
 	"io"
 	"strconv"
@@ -21,6 +22,7 @@ const (
 	responseStateWriteStatusLine responseState = iota
 	responseStateWriteHeaders
 	responseStateWriteBody
+	responseStateWriteChunkBody
 	responseStateDone
 )
 
@@ -126,5 +128,51 @@ func (w *Writer) WriteBody(p []byte) (int, error) {
 	}
 
 	return 0, errors.New("Error: Action out of order")
+
+}
+
+func (w *Writer) WriteChunkedBody(p []byte) (int, error) {
+
+	return fmt.Fprintf(w.W, "%x\r\n%s\r\n", len(p), p)
+}
+
+func (w *Writer) WriteChunkedBodyDone() (int, error) {
+
+	if w.state == responseStateDone {
+		return 0, errors.New("Error: Unable to perform action state is already Done")
+	}
+
+	w.state = responseStateWriteChunkBody
+
+	return fmt.Fprint(w.W, "0\r\n")
+
+}
+
+func (w *Writer) WriteTrailers(h headers.Headers) error {
+
+	if w.state != responseStateWriteChunkBody {
+		return errors.New("Error: Unable to perform actions out of order, writing trailer must be the last action")
+	}
+
+	for key, val := range h {
+
+		formattedHeader := key + ": " + val + "\r\n"
+
+		_, err := w.W.Write([]byte(formattedHeader))
+
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err := w.W.Write([]byte("\r\n"))
+
+	if err != nil {
+		return err
+	}
+
+	w.state = responseStateDone
+
+	return nil
 
 }

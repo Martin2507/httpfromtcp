@@ -1,12 +1,19 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"httpfromtcp/internal/headers"
 	"httpfromtcp/internal/request"
 	"httpfromtcp/internal/response"
 	"httpfromtcp/internal/server"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -31,6 +38,11 @@ func main() {
 }
 
 func handler(w *response.Writer, req *request.Request) {
+
+	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/") {
+		proxyHandler(w, req)
+		return
+	}
 
 	switch req.RequestLine.RequestTarget {
 
@@ -107,4 +119,84 @@ func handler(w *response.Writer, req *request.Request) {
 		}
 	}
 
+}
+
+func proxyHandler(w *response.Writer, req *request.Request) {
+
+	path := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin/")
+	fullPath := "https://httpbin.org/" + path
+
+	resp, err := http.Get(fullPath)
+	if err != nil {
+		log.Printf("Error: Unable to connect to httpbin.org: %s", err)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	header := headers.NewHeaders()
+	header["connection"] = "close"
+	header["content-type"] = resp.Header.Get("Content-Type")
+	header["Transfer-Encoding"] = "chunked"
+	header["Trailer"] = "X-Content-SHA256, X-Content-Length"
+
+	err = w.WriteStatusLine(response.StatusOK)
+	if err != nil {
+		log.Printf("Error writing Status Line in httpserver/main.go: %s", err)
+		return
+	}
+
+	err = w.WriteHeaders(header)
+	if err != nil {
+		log.Printf("Error writing Headers in httpserver/main.go: %s", err)
+		return
+	}
+
+	buffer := make([]byte, 1024)
+	var fullBody []byte
+
+	for {
+
+		n, err := resp.Body.Read(buffer)
+
+		if n > 0 {
+			_, err = w.WriteChunkedBody(buffer[:n])
+			if err != nil {
+				log.Printf("Error writing Body in httpserver/main.go: %s", err)
+				return
+			}
+
+			fullBody = append(fullBody, buffer[:n]...)
+		}
+
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			log.Printf("Error: Unable to read data from response: %s", err)
+			break
+		}
+
+	}
+
+	_, err = w.WriteChunkedBodyDone()
+	if err != nil {
+		log.Printf("Error: Unable to update the state to done: %s", err)
+		return
+	}
+
+	trailerHeaders := headers.NewHeaders()
+
+	hashHex := sha256.Sum256(fullBody)
+	hashStr := hex.EncodeToString(hashHex[:])
+
+	trailerHeaders["X-Content-SHA256"] = hashStr
+	trailerHeaders["X-Content-Length"] = strconv.Itoa(len(fullBody))
+
+	err = w.WriteTrailers(trailerHeaders)
+	if err != nil {
+		log.Printf("Error: Unable to write a trailer: %s", err)
+		return
+	}
 }
