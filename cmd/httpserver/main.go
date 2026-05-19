@@ -94,6 +94,36 @@ func handler(w *response.Writer, req *request.Request) {
 			}
 		}
 
+	case "/video":
+		{
+			videoBuffer, err := os.ReadFile("assets/vim.mp4")
+			if err != nil {
+				log.Printf("Error: Unable to open file: %s", err)
+				return
+			}
+
+			header := response.GetDefaultHeaders(len(videoBuffer))
+			header["content-type"] = "video/mp4"
+
+			err = w.WriteStatusLine(response.StatusOK)
+			if err != nil {
+				log.Printf("Error writing Status Line in httpserver/main.go: %s", err)
+				return
+			}
+
+			err = w.WriteHeaders(header)
+			if err != nil {
+				log.Printf("Error writing Headers in httpserver/main.go: %s", err)
+				return
+			}
+
+			_, err = w.WriteBody(videoBuffer)
+			if err != nil {
+				log.Printf("Error writing Body in httpserver/main.go: %s", err)
+				return
+			}
+		}
+
 	default:
 		{
 			header := response.GetDefaultHeaders(len(html200))
